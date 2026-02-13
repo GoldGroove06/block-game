@@ -4,7 +4,7 @@ const { model, Schema,models } = mongoose;
 const userSchema = new Schema(
   {
     username: { type: String, required: true },
-    claimedBlocks: {type: Map}
+    claimedBlocks: {type: Map, of: Boolean, default: {}}
   },
   { timestamps: true }
 );
