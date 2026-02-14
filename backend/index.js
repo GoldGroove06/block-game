@@ -17,47 +17,74 @@ const io = new Server(server, {
 app.get('/', (req, res) => {
     res.send('Hello World!')
 })
-
-io.on('connection', async (socket) => {
-    await connectMongo()
+await connectMongo()
+io.on('connection', (socket) => {
     socket.on('joinroom', async (roomData) => {
-        let userExists
-        let roomExists
-        let claimedBlocksDict
-        userExists = await Users.findOne({ username: roomData.username })
-        console.log(userExists)
-        if (userExists) { socket.emit("error", { error: "userExists" }) }
-        if (!userExists) {
-            userExists = await Users.create({
-                username: roomData.username
-            })
+        let claimedBlocksDict = {}
+        let userExists = await Users.findOne({ username: roomData.username })
 
-            roomExists = await Room.findOne({ roomId: roomData.room })
-            console.log(roomExists)
-            if (!roomExists) {
-                roomExists = await Room.create({
-                    roomId: roomData.room,
-                    Users
-                })
-            }
-            socket.join(roomData.room)
-            roomExists.users.push(userExists);
+        if (userExists) {
+            socket.emit("error", { error: "userExists" })
+            return
+        }
 
-            await roomExists.save()
+        userExists = await Users.create({
+            username: roomData.username
+        })
 
-            console.log(roomExists.users)
-            
-            console.log("room joined by", roomData.username)
-            socket.on('click', async (data) => {
-                console.log(data)
-                userExists.claimedBlocks.set(data.itemNo.toString(), true)
-                await userExists.save()
-                io.sockets.in(roomData.room).emit('click', data)
+        let roomExists = await Room.findOne({ roomId: roomData.room })
+
+        if (!roomExists) {
+            roomExists = await Room.create({
+                roomId: roomData.room,
+                users: []
             })
         }
 
-    })
+        socket.join(roomData.room)
+        roomExists.users.push(userExists._id)
+        await roomExists.save()
 
+        console.log("room joined by", roomData.username)
+        const users = await Users.find({
+            _id: { $in: roomExists.users }
+        })
+
+        for (const user of users) {
+            if (user.claimedBlocks?.size > 0) {
+                user.claimedBlocks.forEach((value, key) => {
+                    claimedBlocksDict[Number(key)] = {
+                        owner: user.username,
+                        claimed: value
+                    }
+                })
+            }
+        }
+
+        io.in(roomData.room).emit('state', { claimedBlocks: claimedBlocksDict })
+
+        socket.on('click', async (data) => {
+            await Users.updateOne(
+                { _id: userExists._id },
+                {
+                    $set: {
+                        [`claimedBlocks.${data.itemNo}`]: true
+                    }
+                }
+            )
+
+            io.in(roomData.room).emit('click', data)
+        })
+
+        socket.on('disconnect', async () => {
+            console.log("user disconnected")
+            await Users.deleteOne({ _id: userExists._id })
+            await Room.updateOne(
+                { _id: roomExists._id },
+                { $pull: { users: userExists._id } }
+            )
+        })
+    })
 })
 
 server.listen(3000, () => {

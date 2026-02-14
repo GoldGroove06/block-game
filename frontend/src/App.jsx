@@ -1,64 +1,190 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { io } from "socket.io-client";
-function App() {
-  const [socket, setSocket] = useState(null)
-  const [room, setRoom] = useState('')
-  const [username, setUsername] = useState('')
-  const [start, setStart] = useState(false)
-  const [clickedItems, setClickedItems] = useState({});
 
-  const handleRes = (data) => {
-    setClickedItems((prevItems) => ({
-      ...prevItems,
-      [data.itemNo]: true,
+const TOTAL_BLOCKS = 100;
+
+function App() {
+  const [socket, setSocket] = useState(null);
+  const [room, setRoom] = useState("");
+  const [username, setUsername] = useState("");
+  const [joined, setJoined] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState("");
+  const [clickedItems, setClickedItems] = useState({});
+  const socketRef = useRef(null);
+
+  const handleRes = useCallback((data) => {
+    setClickedItems((prev) => ({
+      ...prev,
+      [data.itemNo]: { owner: data.username, claimed: true },
     }));
+  }, []);
+
+  const handleJoin = (e) => {
+    e.preventDefault();
+    setError("");
+
+    const trimmedUser = username.trim();
+    const trimmedRoom = room.trim();
+
+    if (!trimmedUser || !trimmedRoom) {
+      setError("Both fields are required.");
+      return;
+    }
+
+    setConnecting(true);
+
+    const socketInstance = io("http://localhost:3000");
+    socketRef.current = socketInstance;
+    setSocket(socketInstance);
+
+    socketInstance.emit("joinroom", {
+      room: trimmedRoom,
+      username: trimmedUser,
+    });
+
+    socketInstance.on("state", (data) => {
+      setClickedItems(data.claimedBlocks);
+      setJoined(true);
+      setConnecting(false);
+    });
+
+    socketInstance.on("error", (data) => {
+      if (data.error === "userExists") {
+        setError("That username is already taken in this room.");
+      } else {
+        setError(data.error || "Something went wrong.");
+      }
+      setConnecting(false);
+      socketInstance.disconnect();
+      socketRef.current = null;
+      setSocket(null);
+    });
+
+    socketInstance.on("click", (data) => {
+      handleRes(data);
+    });
+
+    socketInstance.on("connect_error", () => {
+      setError("Cannot reach the server. Is it running?");
+      setConnecting(false);
+    });
   };
 
   useEffect(() => {
-    if( room && start){
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
 
-    
-    const socketInstance = io("http://localhost:3000");
-    setSocket(socketInstance)
-    console.log("started")
-    socketInstance.emit("joinroom", {room, username})
-    socketInstance.on("error", (data) => {
-      console.log(data.error)
-    })
-    socketInstance.on("click", (data) => {
-      handleRes(data)
-    });
-  }
+  const handleBlockClick = (e, itemNo) => {
+    e.preventDefault();
+    if (!socket || clickedItems[itemNo]?.claimed) return;
+    socket.emit("click", { itemNo, username });
+  };
 
-  }, [room, start])
-  console.log(clickedItems)
-  const handleButtonClick = (e, itemNo) => {
-    e.preventDefault()
+  // ─── Modal ───
+  if (!joined) {
+    return (
+      <div className="modal-overlay" id="join-modal">
+        <div className="modal-card">
+          <h1 className="modal-title">Block Game</h1>
+          <p className="modal-subtitle">
+            Claim blocks in real-time with others.
+          </p>
 
-    socket.emit("click", {itemNo, username})
-  }
-  return (
-    <div className="p-4">
-      <div>
-        Enter Name: <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}/>
-        Enter Room Number: <input type="text" value={room} onChange={(e) => setRoom(e.target.value)}/>
-        <button onClick={() => setStart(true)}>Start</button>
+          {error && (
+            <div className="error-message" id="error-message" role="alert">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleJoin}>
+            <div className="field-group">
+              <label className="field-label" htmlFor="username-input">
+                Username
+              </label>
+              <input
+                id="username-input"
+                className="field-input"
+                type="text"
+                placeholder="Enter your name"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                disabled={connecting}
+                autoFocus
+              />
+            </div>
+
+            <div className="field-group">
+              <label className="field-label" htmlFor="room-input">
+                Room ID
+              </label>
+              <input
+                id="room-input"
+                className="field-input"
+                type="text"
+                placeholder="Enter room code"
+                value={room}
+                onChange={(e) => setRoom(e.target.value)}
+                disabled={connecting}
+              />
+            </div>
+
+            <button
+              id="join-button"
+              className="btn-primary"
+              type="submit"
+              disabled={connecting}
+            >
+              {connecting ? "Connecting…" : "Join Room"}
+            </button>
+          </form>
+        </div>
       </div>
-      {/* The parent container sets up the grid */}
-      <div className="grid grid-cols-1 md:grid-cols-8 gap-2">
-        {[...Array(100)].map((_, key) => (
-          // Child elements are automatically placed in the grid
-          <button
-            key={key}
-            onClick={(e) => handleButtonClick(e, key)}
-            className={`${clickedItems[key] ? "bg-green-500" : "bg-gray-500"} p-6 rounded-lg shadow-md text-white flex items-center justify-center h-24`}
-          >
-            {key}
-          </button>
-        ))}
+    );
+  }
+
+  // ─── Game Board ───
+  return (
+    <div>
+      <header className="app-header">
+        <div className="app-logo">Block Game</div>
+        <div className="app-meta">
+          <span className="meta-tag">{username}</span>
+          <span className="meta-tag">Room {room}</span>
+        </div>
+      </header>
+
+      <div className="block-grid-container">
+        <div className="block-grid">
+          {[...Array(TOTAL_BLOCKS)].map((_, i) => {
+            const item = clickedItems[i];
+            const isClaimed = item?.claimed;
+
+            return (
+              <button
+                key={i}
+                id={`block-${i}`}
+                className={`block-cell${isClaimed ? " claimed" : ""}`}
+                onClick={(e) => handleBlockClick(e, i)}
+                style={{ animationDelay: `${i * 12}ms` }}
+              >
+                <span className="block-number">{i}</span>
+                {isClaimed && (
+                  <span className="block-owner" title={item.owner}>
+                    {item.owner}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
