@@ -4,12 +4,14 @@ import { Server } from 'socket.io'
 import connectMongo from './lib/connectMongo.js';
 import { Room } from './models/room.js';
 import { Users } from './models/users.js';
+import dotenv from 'dotenv'
 
+dotenv.config();
 const app = express()
 const server = createServer(app)
 const io = new Server(server, {
     cors: {
-        origin: "*"
+        origin: process.env.CORS_ORIGIN
     }
 })
 
@@ -17,6 +19,7 @@ const io = new Server(server, {
 app.get('/', (req, res) => {
     res.send('Hello World!')
 })
+
 await connectMongo()
 io.on('connection', (socket) => {
     socket.on('joinroom', async (roomData) => {
@@ -87,7 +90,7 @@ io.on('connection', (socket) => {
     })
 })
 
-server.listen(3000, () => {
+server.listen(process.env.PORT, () => {
     console.log('Example app listening on port 3000!')
 }
 )
